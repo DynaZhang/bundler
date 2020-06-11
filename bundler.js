@@ -9,79 +9,76 @@ const babel = require('@babel/core');   // babel的核心模块
  * @param {文件名} filename 
  */
 const moduleAnalyser = (filename) => {
-  const content = fs.readFileSync(filename, 'utf-8');   // 获取文件内容
-  const ast = parser.parse(content, {
-    sourceType: 'module'
-  })  // 分析js文件，转换成ast(抽象语法树)
   const dependencies = {};
+  const content = fs.readFileSync(filename, 'utf-8');
+  const ast = parser.parse(content,{
+      sourceType: 'module'
+  });
   traverse(ast, {
-    ImportDeclaration({ node }) {
-      const dirname = path.dirname(filename)
-      // const newFile = path.join(dirname,node.source.value)  // 获取依赖所在的绝对路径
-      const newFile = './' + path.join(dirname,node.source.value)  // 获取依赖所在的相对路径(相对于bunlder文件夹)
-      dependencies[node.source.value] = newFile  // 获取依赖的文件名
-    }
-  })
+      ImportDeclaration({ node }){
+          const dirname = path.dirname(filename);
+          const dependency = node.source.value;
+          const newFile = `./${path.join(dirname, dependency)}`;
+          dependencies[dependency] = newFile;
+      }
+  });
   const { code } = babel.transformFromAst(ast, null, {
-    presets: ['@babel/preset-env']
-  })
+      presets: ["@babel/preset-env"]
+  });
   return {
-    filename,
-    dependencies,
-    code
-  }
-}
+      filename,
+      dependencies,
+      code
+  };
+};
 
 /**
  * 生成依赖图
  * @param {入口文件} entry 
  */
 const makeDependenciesGraph = (entry) => {
-  const entryModule = moduleAnalyser(entry)
-  const graphArr = [entryModule];
-  for(let i = 0; i < graphArr.length; i++) {
-    const item = graphArr[i]
-    const { dependencies } = item
-    if (dependencies) {
-      for (const key in dependencies) {
-        graphArr.push(moduleAnalyser(dependencies[key]))
+  const entryModule = moduleAnalyser(entry);
+  const graphQueue = [ entryModule ];
+  const graph = {};
+
+  while(graphQueue.length){
+      const item = graphQueue.shift();
+      const { dependencies, code } = item;
+      if(dependencies){
+          graph[item.filename] = {
+              dependencies,
+              code
+          };
+          for(let j in dependencies){  
+              graphQueue.push(moduleAnalyser(dependencies[j]));
+          }
       }
-    }
   }
-  const graph = {}
-  graphArr.forEach(item => {
-    graph[item.filename] = {
-      dependencies: item.dependencies,
-      code: item.code
-    }
-  })
-  return graph
-}
+  return graph;
+};
 
 /**
  * 生成代码
  * @param {入口文件} entry 
  */
 const generateCode = (entry) => {
-  const graph = JSON.stringify(makeDependenciesGraph(entry))
-  console.log(graph)
+  const graph = JSON.stringify(makeDependenciesGraph(entry));
   return `
-    (function(graph) {
-      function require(module) {
-        function localRequire(relativePath) {
-          require(graph[module].dependencies[relativePath]);
-        }
-        var exports = {};
-        (function(require,exports,code){
-          eval(code)
-        })(localRequire, exports, graph[module].code)
-        return exports;
-      }
-      require('${entry}')
-    })(${graph})
+      (function(graph){
+          function require(module) {
+              function localRequire(relativePath){
+                  return require(graph[module].dependencies[relativePath]);
+              }
+              let exports = {};
+              (function(require, exports, code){
+                  eval(code);
+              })(localRequire, exports, graph[module].code)
+              return exports;
+          }
+          require('${entry}');
+      })(${graph})
   `;
-
-}
+};
 
 const code = generateCode('./src/index.js')
 console.log(code)
